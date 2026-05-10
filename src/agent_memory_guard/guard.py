@@ -13,7 +13,7 @@ from agent_memory_guard.detectors.base import DetectionResult, Detector
 from agent_memory_guard.detectors.injection import PromptInjectionDetector
 from agent_memory_guard.detectors.leakage import SensitiveDataDetector
 from agent_memory_guard.detectors.protected_keys import ProtectedKeyDetector
-from agent_memory_guard.events import Action, SecurityEvent, Severity
+from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceType
 from agent_memory_guard.exceptions import IntegrityError, PolicyViolation
 from agent_memory_guard.integrity import IntegrityRegistry, hash_value
 from agent_memory_guard.policies.policy import Policy, merge_protected_keys
@@ -113,7 +113,7 @@ class MemoryGuard:
                 drifted.append(key)
         return drifted
 
-    def write(self, key: str, value: Any, *, source: str = "agent") -> Action:
+    def write(self, key: str, value: Any, *, source: str = "agent", source_type: SourceType = SourceType.UNKNOWN) -> Action:
         """Inspect and (if policy allows) commit a write. Returns the action taken."""
         committed_value = value
         verdicts = self._run_detectors(key, value, operation="write")
@@ -129,6 +129,7 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Write blocked by policy",
                 metadata={"source": source},
+                source_type=source_type,
             )
             if self._snapshot_on_block:
                 self._snapshots.capture(
@@ -148,6 +149,7 @@ class MemoryGuard:
                 key=key,
                 message="Write quarantined for review",
                 metadata={"source": source},
+                source_type=source_type,
             )
             return Action.QUARANTINE
 
@@ -161,6 +163,7 @@ class MemoryGuard:
                 key=key,
                 message="Sensitive content redacted before write",
                 metadata={"source": source},
+                source_type=source_type,
             )
 
         self._store.set(key, committed_value)
@@ -177,6 +180,7 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Write allowed with findings",
                 metadata={"source": source},
+                source_type=source_type,
             )
         return decision
 
@@ -196,6 +200,7 @@ class MemoryGuard:
                 key=key,
                 message="Integrity verification failed on read",
                 metadata={"expected": exc.expected, "actual": exc.actual},
+                source_type=SourceType.SYSTEM,
             )
             raise
 
@@ -213,6 +218,7 @@ class MemoryGuard:
                 key=key,
                 message="Read blocked by policy",
                 metadata={"sink": sink},
+                source_type=SourceType.SYSTEM,
             )
             raise PolicyViolation(f"Read of '{key}' blocked by policy", key=key)
 
@@ -226,6 +232,7 @@ class MemoryGuard:
                 key=key,
                 message="Sensitive content redacted on read",
                 metadata={"sink": sink},
+                source_type=SourceType.SYSTEM,
             )
         elif any(v.matched for v in verdicts):
             self._emit(
@@ -236,6 +243,7 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Read allowed with findings",
                 metadata={"sink": sink},
+                source_type=SourceType.SYSTEM,
             )
         return value
 
@@ -248,6 +256,7 @@ class MemoryGuard:
                 operation="delete",
                 key=key,
                 message=f"Delete of protected key '{key}' blocked",
+                source_type=SourceType.SYSTEM,
             )
             raise PolicyViolation(f"Delete of '{key}' blocked", key=key)
         self._store.delete(key)
@@ -284,6 +293,7 @@ class MemoryGuard:
             key="*",
             message=f"Rolled back to snapshot {snap.snapshot_id} ({snap.label})",
             metadata={"snapshot_id": snap.snapshot_id, "digest": snap.digest},
+            source_type=SourceType.SYSTEM,
         )
         return snap
 
@@ -328,6 +338,7 @@ class MemoryGuard:
         key: str,
         message: str,
         metadata: dict[str, Any] | None = None,
+        source_type: SourceType = SourceType.UNKNOWN,
     ) -> None:
         event = SecurityEvent(
             detector=detector,
@@ -336,6 +347,7 @@ class MemoryGuard:
             operation=operation,
             key=key,
             message=message,
+            source_type=source_type,
             metadata=dict(metadata or {}),
         )
         self._events.append(event)

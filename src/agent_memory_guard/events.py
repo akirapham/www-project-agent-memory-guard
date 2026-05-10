@@ -1,3 +1,4 @@
+"""Security event and supporting types."""
 from __future__ import annotations
 
 import time
@@ -22,6 +23,15 @@ class Action(str, Enum):
     QUARANTINE = "quarantine"
 
 
+class SourceType(str, Enum):
+    """Provenance of a memory write — where the write came from."""
+    USER_INPUT = "user_input"
+    TOOL_OUTPUT = "tool_output"
+    MODEL_INFERENCE = "model_inference"
+    SYSTEM = "system"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class SecurityEvent:
     """Structured record of a guard decision, suitable for SIEM forwarding."""
@@ -32,6 +42,7 @@ class SecurityEvent:
     key: str
     message: str
     operation: str = "write"
+    source_type: SourceType = SourceType.UNKNOWN
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -46,5 +57,9 @@ class SecurityEvent:
             "operation": self.operation,
             "key": self.key,
             "message": self.message,
+            "source_type": self.source_type.value,
             "metadata": self.metadata,
         }
+
+
+__all__ = ["Action", "SecurityEvent", "Severity", "SourceType"]
