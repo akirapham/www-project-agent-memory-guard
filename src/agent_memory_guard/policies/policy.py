@@ -95,18 +95,35 @@ class Policy:
                 PolicyRule("quarantine_rapid_change", "rapid_change", Action.QUARANTINE),
             ],
         )
+
     @classmethod
     def tiered(cls) -> Policy:
-        """Pre-configured policy with default memory class taxonomy.
+        """Pre-configured policy with key-pattern-scoped detector rules.
 
-        Memory classes:
-        - credentials.* : locked, block, 24h TTL
-        - permissions.* : locked, block, no decay
-        - policies.* : system-only, block, no decay
-        - facts.* : trusted, quarantine, 30d revalidation
-        - preferences.* : user-only, redact, 90d revalidation
-        - tool_results.* : untrusted, block + quarantine, 1h
-        - scratch.* : ephemeral, warn, session-bound
+        Maps memory-class key namespaces to detector-specific actions, so
+        e.g. a ``prompt_injection`` finding inside ``credentials.*`` is blocked
+        while the same finding inside ``facts.*`` is quarantined for review.
+
+        Key namespaces (matched as ``fnmatch`` patterns):
+        - ``credentials.*`` — block ``prompt_injection`` and ``sensitive_data``;
+          also listed in ``protected_keys``.
+        - ``permissions.*`` — block ``prompt_injection`` and ``sensitive_data``;
+          also listed in ``protected_keys``.
+        - ``policies.*`` — block ``prompt_injection``; also in ``protected_keys``.
+        - ``facts.*`` — quarantine ``prompt_injection`` and ``size_anomaly``;
+          also in ``protected_keys``.
+        - ``preferences.*`` — redact ``sensitive_data``;
+          also in ``protected_keys``.
+        - ``tool_results.*`` — block ``prompt_injection``,
+          quarantine ``size_anomaly``.
+        - ``scratch.*`` — quarantine ``size_anomaly``.
+
+        Global catch-all rules (block injection, redact secrets, block
+        protected-key writes, quarantine size/rate anomalies) run after the
+        pattern-scoped rules.
+
+        Time-to-live, revalidation, session lifetime, and actor-role gating
+        are NOT implemented here; that's a separate roadmap item.
         """
         return cls(
             default_action=Action.ALLOW,
@@ -116,9 +133,9 @@ class Policy:
                 "policies.*",
                 "facts.*",
                 "preferences.*",
-            ),
+            ),  # tool_results.* and scratch.* are writable by design
             rules=[
-                # credentials.* — locked, block, 24h TTL
+                # credentials.* — locked, block
                 PolicyRule(
                     "block_credential_injection",
                     "prompt_injection",
@@ -184,7 +201,7 @@ class Policy:
                     Action.QUARANTINE,
                     keys=("tool_results.*",),
                 ),
-                # scratch.* — ephemeral, warn
+                # scratch.* — ephemeral, quarantine
                 PolicyRule(
                     "quarantine_scratch_anomaly",
                     "size_anomaly",
@@ -199,6 +216,7 @@ class Policy:
                 PolicyRule("quarantine_rapid_change", "rapid_change", Action.QUARANTINE),
             ],
         )
+
 
 def _parse_action(value: Any) -> Action:
     if isinstance(value, Action):
