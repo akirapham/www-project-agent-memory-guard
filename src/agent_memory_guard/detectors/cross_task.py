@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from agent_memory_guard.classification import (
-    ClassificationRegistry,
     DURABLE_CLASSES,
+    ClassificationRegistry,
     MemoryClass,
 )
 from agent_memory_guard.detectors.base import DetectionResult
