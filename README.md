@@ -6,8 +6,6 @@
 
 [![agent-memory-guard on PyPI](https://pepy.tech/badge/agent-memory-guard)](https://pepy.tech/project/agent-memory-guard) [![langchain-agent-memory-guard on PyPI](https://pepy.tech/badge/langchain-agent-memory-guard)](https://pepy.tech/project/langchain-agent-memory-guard) [![GitHub Clones](https://img.shields.io/badge/github_clones-890-blue?logo=github)](https://github.com/OWASP/www-project-agent-memory-guard/graphs/traffic)
 
-**Total Downloads = [PyPI: agent-memory-guard](https://pepy.tech/project/agent-memory-guard) + [PyPI: langchain-agent-memory-guard](https://pepy.tech/project/langchain-agent-memory-guard) + [GitHub Clones](https://github.com/OWASP/www-project-agent-memory-guard/graphs/traffic)**
-
 </div>
 
 ---
