@@ -11,9 +11,9 @@ microsoft/autogen#7673 (discussioncomment-16895746):
 import pytest
 
 from agent_memory_guard import (
+    ClassificationError,
     MemoryClass,
     MemoryGuard,
-    ClassificationError,
 )
 
 
