@@ -2,11 +2,13 @@
 
 <div align="center">
 
-### 📦 1,780+ Total Downloads & Clones
+### 📦 1,527+ Total Downloads & Clones
 
-[![agent-memory-guard on PyPI](https://pepy.tech/badge/agent-memory-guard)](https://pepy.tech/project/agent-memory-guard) [![langchain-agent-memory-guard on PyPI](https://pepy.tech/badge/langchain-agent-memory-guard)](https://pepy.tech/project/langchain-agent-memory-guard) [![GitHub Clones](https://img.shields.io/badge/github_clones-890-blue?logo=github)](https://github.com/OWASP/www-project-agent-memory-guard/graphs/traffic)
+[![agent-memory-guard on PyPI](https://pepy.tech/badge/agent-memory-guard)](https://pepy.tech/project/agent-memory-guard) [![langchain-agent-memory-guard on PyPI](https://pepy.tech/badge/langchain-agent-memory-guard)](https://pepy.tech/project/langchain-agent-memory-guard) [![GitHub Clones](https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url=https://gist.githubusercontent.com/vgudur-dev/c04e12f68c363625faf12faaf03a03ca/raw/clone.json&logo=github)](https://github.com/MShawon/github-clone-count-badge)
 
-**Total Downloads = [PyPI: agent-memory-guard](https://pepy.tech/project/agent-memory-guard) + [PyPI: langchain-agent-memory-guard](https://pepy.tech/project/langchain-agent-memory-guard) + [GitHub Clones](https://github.com/OWASP/www-project-agent-memory-guard/graphs/traffic)**
+**Total Downloads = [PyPI: agent-memory-guard](https://pepy.tech/project/agent-memory-guard) + [PyPI: langchain-agent-memory-guard](https://pepy.tech/project/langchain-agent-memory-guard) + [GitHub Clones (cumulative)](https://gist.githubusercontent.com/vgudur-dev/c04e12f68c363625faf12faaf03a03ca/raw/clone.json)**
+
+*Clone count is tracked daily via [github-clone-count-badge](https://github.com/MShawon/github-clone-count-badge) to prevent data loss from GitHub's 14-day traffic window.*
 
 </div>
 
