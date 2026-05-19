@@ -16,7 +16,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/agent-memory-guard.svg)](https://pypi.org/project/agent-memory-guard/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/OWASP/www-project-agent-memory-guard/blob/main/LICENSE.md)
 [![OWASP Incubator](https://img.shields.io/badge/OWASP-Incubator-yellow.svg)](https://owasp.org/www-project-agent-memory-guard/)
-[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF-Best%20Practices-lightgrey.svg)](https://www.bestpractices.dev/)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12908/badge)](https://www.bestpractices.dev/projects/12908)
 
 > **⭐ If this project helps you secure your AI agents, [star it on GitHub](https://github.com/OWASP/www-project-agent-memory-guard/stargazers) — it helps others find the project.**
 > **🔗 Share it:** [Tweet](https://twitter.com/intent/tweet?text=OWASP%20Agent%20Memory%20Guard%20%E2%80%94%20runtime%20defense%20against%20AI%20agent%20memory%20poisoning%20(ASI06)&url=https://github.com/OWASP/www-project-agent-memory-guard) · [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https://github.com/OWASP/www-project-agent-memory-guard) · [Hacker News](https://news.ycombinator.com/submitlink?u=https://github.com/OWASP/www-project-agent-memory-guard&t=OWASP%20Agent%20Memory%20Guard)
