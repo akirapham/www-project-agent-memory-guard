@@ -19,7 +19,8 @@ from agent_memory_guard.detectors.cross_task import CrossTaskContaminationDetect
 from agent_memory_guard.detectors.injection import PromptInjectionDetector
 from agent_memory_guard.detectors.leakage import SensitiveDataDetector
 from agent_memory_guard.detectors.protected_keys import ProtectedKeyDetector
-from agent_memory_guard.events import Action, SecurityEvent, Severity
+from agent_memory_guard.detectors.self_reinforcement import SelfReinforcementDetector
+from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceClass
 from agent_memory_guard.exceptions import (
     ClassificationError,
     IntegrityError,
@@ -73,6 +74,7 @@ class MemoryGuard:
         self._cross_task_detector = CrossTaskContaminationDetector(
             self._classification, current_task=current_task
         )
+        self._self_reinforcement_detector = SelfReinforcementDetector()
 
         if detectors is None:
             self._detectors: list[Detector] = [
@@ -82,6 +84,7 @@ class MemoryGuard:
                 RapidChangeDetector(),
                 self._protected_detector,
                 self._cross_task_detector,
+                self._self_reinforcement_detector,
             ]
         else:
             self._detectors = list(detectors)
@@ -91,6 +94,17 @@ class MemoryGuard:
                 isinstance(d, CrossTaskContaminationDetector) for d in self._detectors
             ):
                 self._detectors.append(self._cross_task_detector)
+            user_self_reinf = next(
+                (d for d in self._detectors if isinstance(d, SelfReinforcementDetector)),
+                None,
+            )
+            if user_self_reinf is None:
+                self._detectors.append(self._self_reinforcement_detector)
+            else:
+                # Reassign the canonical reference so `_pending_source_class`
+                # and `note_independent_write` operate on the detector that
+                # actually runs.
+                self._self_reinforcement_detector = user_self_reinf
 
         for key in self._policy.immutable_keys:
             if key in self._store:
@@ -236,17 +250,34 @@ class MemoryGuard:
         value: Any,
         *,
         source: str = "agent",
+        source_class: SourceClass | str | None = None,
+        receipt_uri: str | None = None,
         cls: MemoryClass | str | None = None,
         task_id: str | None = None,
     ) -> Action:
         """Inspect and (if policy allows) commit a write. Returns the action taken.
 
-        Pass `cls=MemoryClass.X` to label the entry with a provenance class.
-        Re-writes to an already-classified key must keep the same class —
-        promotion is only available through :meth:`promote`. This prevents an
-        untrusted source (e.g. a tool result) from silently overwriting a
-        trusted entry (e.g. verified_preference or policy).
+        Parameters
+        ----------
+        source_class
+            Provenance of this write — drives the self-reinforcement detector
+            and per-class telemetry. Use :class:`SourceClass.AGENT_AUTHORED`
+            for writes the agent generates from its own reasoning;
+            :class:`SourceClass.EXTERNAL_TOOL` for tool outputs;
+            :class:`SourceClass.USER_INPUT` for direct user content.
+        receipt_uri
+            Optional pointer into an external audit / receipt chain (e.g.
+            an Ed25519 co-signed receipt URI). Stored on the emitted
+            ``SecurityEvent`` so downstream SOC tooling can correlate
+            guard decisions with execution receipts.
+        cls
+            Provenance class for the entry (see :class:`MemoryClass`).
+        task_id
+            Override the task scope for this entry (defaults to the guard's
+            current task).
         """
+        normalised_source_class: SourceClass = _coerce_source_class(source_class)
+
         if cls is not None:
             target_class = MemoryClass(cls) if not isinstance(cls, MemoryClass) else cls
             existing = self._classification.get(key)
@@ -262,6 +293,8 @@ class MemoryGuard:
                         f"{target_class.value}; use promote() instead"
                     ),
                     metadata={"from": existing.value, "to": target_class.value},
+                    source_class=normalised_source_class,
+                    receipt_uri=receipt_uri,
                 )
                 raise ClassificationError(
                     f"Cannot reclassify '{key}' on write; use promote()",
@@ -273,7 +306,11 @@ class MemoryGuard:
             target_class = self._classification.get(key)
 
         committed_value = value
-        verdicts = self._run_detectors(key, value, operation="write")
+        self._self_reinforcement_detector._pending_source_class = normalised_source_class
+        try:
+            verdicts = self._run_detectors(key, value, operation="write")
+        finally:
+            self._self_reinforcement_detector._pending_source_class = SourceClass.UNKNOWN
         worst = _highest_severity(verdicts)
         decision = self._decide(verdicts, key=key)
 
@@ -286,6 +323,8 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Write blocked by policy",
                 metadata={"source": source},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
             )
             if self._snapshot_on_block:
                 self._snapshots.capture(
@@ -305,6 +344,8 @@ class MemoryGuard:
                 key=key,
                 message="Write quarantined for review",
                 metadata={"source": source},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
             )
             return Action.QUARANTINE
 
@@ -318,9 +359,17 @@ class MemoryGuard:
                 key=key,
                 message="Sensitive content redacted before write",
                 metadata={"source": source},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
             )
 
         self._store.set(key, committed_value)
+
+        # Independent (non-agent-authored) writes reset the self-reinforcement
+        # cool-down: arrival of new external/user evidence is what breaks a
+        # self-poisoning loop.
+        if normalised_source_class != SourceClass.AGENT_AUTHORED:
+            self._self_reinforcement_detector.note_independent_write(key)
 
         if target_class is not None:
             existing_task = self._classification.task_of(key)
@@ -342,6 +391,8 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Write allowed with findings",
                 metadata={"source": source, **_merged_metadata(verdicts)},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
             )
         return decision
 
@@ -418,6 +469,59 @@ class MemoryGuard:
         self._store.delete(key)
         self._integrity.clear(key)
         self._classification.clear(key)
+        self._self_reinforcement_detector.reset(key)
+
+    # ---- lifecycle governance ----------------------------------------
+
+    def retire_if(
+        self,
+        predicate: Callable[[str, Any], bool],
+        *,
+        reason: str = "lifecycle",
+    ) -> list[str]:
+        """Remove entries whose `predicate(key, value)` returns True.
+
+        Implements the lifecycle-governance pattern from the
+        microsoft/autogen#7683 thread: rather than silently expiring
+        memory on a wall-clock schedule, callers describe the condition
+        ("retire any `tool_observation` older than 1 hour", "retire any
+        entry tagged as low-confidence on next snapshot") and the guard
+        captures a forensic snapshot before removing them, so an operator
+        can roll back if the retirement turns out to have been premature.
+
+        Returns the list of keys that were retired. Skips protected keys
+        (raises no error — they remain in place).
+        """
+        snap = self._snapshots.capture(
+            self._dump_store(), label=f"pre-retire:{reason}"
+        )
+        retired: list[str] = []
+        for key, value in list(self._store.items()):
+            if self._protected_detector.matches(key):
+                continue
+            try:
+                should_retire = bool(predicate(key, value))
+            except Exception:
+                log.exception("retire_if predicate raised on key=%s", key)
+                continue
+            if not should_retire:
+                continue
+            self._store.delete(key)
+            self._integrity.clear(key)
+            self._classification.clear(key)
+            self._self_reinforcement_detector.reset(key)
+            retired.append(key)
+            self._emit(
+                detector="lifecycle",
+                severity=Severity.INFO,
+                action=Action.ALLOW,
+                operation="retire",
+                key=key,
+                message=f"Retired by lifecycle rule '{reason}'",
+                metadata={"reason": reason, "pre_snapshot_id": snap.snapshot_id},
+                source_class=SourceClass.SYSTEM,
+            )
+        return retired
 
     # ---- snapshots ----------------------------------------------------
 
@@ -494,6 +598,8 @@ class MemoryGuard:
         key: str,
         message: str,
         metadata: dict[str, Any] | None = None,
+        source_class: SourceClass = SourceClass.UNKNOWN,
+        receipt_uri: str | None = None,
     ) -> None:
         event = SecurityEvent(
             detector=detector,
@@ -502,6 +608,8 @@ class MemoryGuard:
             operation=operation,
             key=key,
             message=message,
+            source_class=source_class,
+            receipt_uri=receipt_uri,
             metadata=dict(metadata or {}),
         )
         self._events.append(event)
@@ -560,6 +668,14 @@ def _merged_metadata(verdicts: list[DetectionResult]) -> dict[str, Any]:
         if v.metadata:
             merged.update(v.metadata)
     return merged
+
+
+def _coerce_source_class(value: SourceClass | str | None) -> SourceClass:
+    if value is None:
+        return SourceClass.UNKNOWN
+    if isinstance(value, SourceClass):
+        return value
+    return SourceClass(str(value))
 
 
 __all__ = ["MemoryGuard", "hash_value"]

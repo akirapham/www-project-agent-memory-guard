@@ -6,7 +6,7 @@ from agent_memory_guard.classification import (
     PromotionEdge,
     PromotionRules,
 )
-from agent_memory_guard.events import Action, SecurityEvent, Severity
+from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceClass
 from agent_memory_guard.exceptions import (
     ClassificationError,
     IntegrityError,
@@ -28,6 +28,7 @@ __all__ = [
     "SecurityEvent",
     "Severity",
     "Action",
+    "SourceClass",
     "MemoryGuardError",
     "PolicyViolation",
     "IntegrityError",

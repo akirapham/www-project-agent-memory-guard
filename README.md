@@ -270,6 +270,106 @@ See the [benchmark results above](#benchmark-results) for category-level breakdo
                        SnapshotStore  -->  rollback / forensics
 ```
 
+## Memory lifecycle governance
+
+Detection at the write boundary catches *content* attacks. Long-running
+agents also suffer from a slower failure mode: an agent re-ingests its own
+prior output, mildly elaborates on it, writes it back, and on the next turn
+treats the elaborated version as established fact. After a few iterations a
+hallucination or attacker suggestion has been "durably remembered" without
+any single write ever looking malicious.
+
+Agent Memory Guard ships two primitives for this lifecycle problem,
+contributed during the three-layer ASI06 architecture discussion at
+[microsoft/autogen#7683](https://github.com/microsoft/autogen/issues/7683):
+
+### Source-class provenance
+
+Every write carries an explicit `source_class` declaring where the content
+came from:
+
+```python
+from agent_memory_guard import MemoryGuard, SourceClass
+
+guard = MemoryGuard()
+
+# Tool output — untrusted, fresh from the outside world.
+guard.write(
+    "tool.search.42",
+    "Acme Q3 revenue was $42M",
+    source_class=SourceClass.EXTERNAL_TOOL,
+    receipt_uri="satp://receipts/01HE4G9Y5R7Q8K2A3B0CWX6F8M",
+)
+
+# Agent's own reasoning written back to memory.
+guard.write(
+    "agent.belief.acme_revenue",
+    "Acme is doing well",
+    source_class=SourceClass.AGENT_AUTHORED,
+)
+```
+
+The four classes — `external_tool`, `user_input`, `agent_authored`, `system`
+— travel with every emitted `SecurityEvent` so SIEM tools can correlate
+guard decisions across the chain. The optional `receipt_uri` is a pointer
+into an external audit / receipt system (e.g. an Ed25519 co-signed receipt)
+for teams running full cryptographic provenance.
+
+### Self-reinforcement cool-down
+
+`SelfReinforcementDetector` watches for the self-poisoning loop: too many
+self-similar `agent_authored` writes to the same key within a cool-down
+window, with no independent corroboration from a different source class.
+
+```python
+from agent_memory_guard import MemoryGuard, SourceClass
+from agent_memory_guard.detectors import SelfReinforcementDetector
+
+guard = MemoryGuard(detectors=[
+    SelfReinforcementDetector(
+        cooldown_seconds=60.0,
+        max_self_writes=3,
+        similarity_threshold=0.85,
+    ),
+])
+
+# Three near-identical agent-authored writes in 60s → flagged.
+# A subsequent external_tool or user_input write resets the counter.
+```
+
+An `EXTERNAL_TOOL` or `USER_INPUT` write on the same key resets the
+cool-down — independent evidence breaks the loop.
+
+### `retire_if` — predicate-driven retirement with rollback pointer
+
+Rather than silently expiring entries on a wall-clock schedule, callers
+describe the retirement condition. The guard captures a snapshot before
+removing matches so retirement is reversible:
+
+```python
+import time
+
+now = time.time()
+
+retired = guard.retire_if(
+    lambda key, value: key.startswith("tool.") and _age(key) > 3600,
+    reason="tool_observation_ttl_1h",
+)
+# Each retirement emits a "lifecycle" SecurityEvent carrying
+# metadata.pre_snapshot_id — call guard.rollback(snap_id) to undo.
+```
+
+Protected keys are skipped automatically. Predicates that raise are
+logged and the entry is preserved.
+
+### OpenTelemetry export
+
+Layer-2 of the three-layer architecture (structured audit trail) is one
+event handler away. See [`examples/opentelemetry_hook.py`](examples/opentelemetry_hook.py)
+for a tracer that emits one span per guard decision with `amg.detector`,
+`amg.source_class`, `amg.receipt_uri`, and the full metadata bag as span
+attributes.
+
 ## Roadmap
 
 - **Q1 2026** — v0.2.1 with OWASP branding (this release).
