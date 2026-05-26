@@ -5,8 +5,6 @@ Metrics are only enabled when ``prometheus-client`` is installed.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 _HAS_PROMETHEUS = False
 try:  # pragma: no cover - optional dependency
     from prometheus_client import (  # type: ignore

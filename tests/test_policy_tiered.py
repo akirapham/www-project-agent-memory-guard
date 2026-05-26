@@ -1,10 +1,10 @@
 """Tests for Policy.tiered() — pattern-scoped detector rules."""
+import pytest
+
 from agent_memory_guard import MemoryGuard
 from agent_memory_guard.events import Action, Severity
 from agent_memory_guard.exceptions import PolicyViolation
 from agent_memory_guard.policies.policy import Policy
-
-import pytest
 
 
 def _decide(detector: str, severity: Severity, key: str) -> Action:
@@ -50,9 +50,10 @@ def test_unmatched_key_falls_through_to_catch_all():
 
 def test_protected_keys_includes_durable_namespaces():
     p = Policy.tiered()
-    for namespace in ("credentials.*", "permissions.*", "policies.*", "facts.*", "preferences.*"):
+    for namespace in ("credentials.*", "permissions.*", "policies.*", "facts.*"):
         assert namespace in p.protected_keys
-    # tool_results and scratch are writable, not protected
+    # preferences.*, tool_results.* and scratch.* are writable, not protected
+    assert "preferences.*" not in p.protected_keys
     assert "tool_results.*" not in p.protected_keys
     assert "scratch.*" not in p.protected_keys
 

@@ -6,7 +6,7 @@ from poisoning another agent's memory.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from agent_memory_guard.events import Action
 from agent_memory_guard.exceptions import PolicyViolation
@@ -31,7 +31,7 @@ class GuardedMemory:
     def __init__(
         self,
         memory: Any,
-        guard: Optional[MemoryGuard] = None,
+        guard: MemoryGuard | None = None,
         *,
         agent_id: str = "default",
         drop_blocked: bool = True,
@@ -62,7 +62,7 @@ class GuardedMemory:
             self._memory.write(key, value)
         return True
 
-    def read(self, key: str, *, owner: Optional[str] = None) -> Any:
+    def read(self, key: str, *, owner: str | None = None) -> Any:
         # Cross-agent isolation: if owner specified, check permission
         if owner and owner != self.agent_id:
             full_key = f"crewai.{owner}.{key}"
@@ -117,7 +117,7 @@ class CrewAISecurityCallback:
     objects on memory operations.
     """
 
-    def __init__(self, guard: Optional[MemoryGuard] = None) -> None:
+    def __init__(self, guard: MemoryGuard | None = None) -> None:
         self.guard = guard or MemoryGuard()
         self.event_log: list[dict] = []
 

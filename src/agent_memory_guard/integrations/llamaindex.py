@@ -5,7 +5,7 @@ screened by a MemoryGuard before it reaches the underlying store.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from agent_memory_guard.events import Action
 from agent_memory_guard.exceptions import PolicyViolation
@@ -34,7 +34,7 @@ class GuardedChatStore(BaseChatStore):  # type: ignore[misc, valid-type]
     def __init__(
         self,
         store: BaseChatStore,
-        guard: Optional[MemoryGuard] = None,
+        guard: MemoryGuard | None = None,
         *,
         drop_blocked: bool = True,
     ) -> None:
@@ -71,7 +71,7 @@ class GuardedChatStore(BaseChatStore):  # type: ignore[misc, valid-type]
         # Optionally re-screen on read
         return raw
 
-    def add_message(self, key: str, message: ChatMessage, idx: Optional[int] = None) -> None:
+    def add_message(self, key: str, message: ChatMessage, idx: int | None = None) -> None:
         msg_key = f"{self.store_key}.{key}.add"
         payload = message.model_dump() if hasattr(message, "model_dump") else str(message)
         try:
@@ -84,7 +84,7 @@ class GuardedChatStore(BaseChatStore):  # type: ignore[misc, valid-type]
             return
         self._store.add_message(key, message, idx=idx)
 
-    def delete_messages(self, key: str) -> Optional[list[ChatMessage]]:
+    def delete_messages(self, key: str) -> list[ChatMessage] | None:
         msg_key = f"{self.store_key}.{key}"
         try:
             self.guard.delete(msg_key)
@@ -92,7 +92,7 @@ class GuardedChatStore(BaseChatStore):  # type: ignore[misc, valid-type]
             pass
         return self._store.delete_messages(key)
 
-    def delete_message(self, key: str, idx: int) -> Optional[ChatMessage]:
+    def delete_message(self, key: str, idx: int) -> ChatMessage | None:
         msg_key = f"{self.store_key}.{key}.{idx}"
         try:
             self.guard.delete(msg_key)
@@ -100,7 +100,7 @@ class GuardedChatStore(BaseChatStore):  # type: ignore[misc, valid-type]
             pass
         return self._store.delete_message(key, idx)
 
-    def delete_last_message(self, key: str) -> Optional[ChatMessage]:
+    def delete_last_message(self, key: str) -> ChatMessage | None:
         msgs = self._store.get_messages(key)
         if not msgs:
             return None

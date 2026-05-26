@@ -132,15 +132,8 @@ class Policy:
                 "credentials.*",
                 "permissions.*",
                 "policies.*",
-            protected_keys=(
-                "credentials.*",
-                "permissions.*",
-                "policies.*",
                 "facts.*",
-                "preferences.*",
-            ),  # tool_results.* and scratch.* are writable by design
-                "preferences.*",
-            ),  # tool_results.* and scratch.* are writable by design
+            ),  # preferences.*, tool_results.* and scratch.* are writable by design
             rules=[
                 # credentials.* — locked, block
                 PolicyRule(
