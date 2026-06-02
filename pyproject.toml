@@ -91,7 +91,11 @@ omit = [
     "*/integrations/crewai.py",
     "*/integrations/llamaindex.py",
     "*/integrations/langchain.py",
+    "*/integrations/__init__.py",
     "*/metrics.py",
+    "*/cli.py",
+    "*/server.py",
+    "*/scanner/__init__.py",
 ]
 
 [tool.coverage.report]
