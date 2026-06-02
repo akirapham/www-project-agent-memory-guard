@@ -2,7 +2,6 @@
 /Gemfile.lock
 /favicon.ico
 _site/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -11,3 +10,9 @@ __pycache__/
 .venv/
 build/
 dist/
+venv-www-project-agent-memory-guard/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+site/
