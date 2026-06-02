@@ -1,13 +1,10 @@
 """Tests for new detectors: ToolAbuse, PrivilegeEscalation, ExcessiveAutonomy."""
 from __future__ import annotations
 
-import pytest
-
-from agent_memory_guard.detectors.tool_abuse import ToolAbuseDetector
-from agent_memory_guard.detectors.privilege_escalation import PrivilegeEscalationDetector
 from agent_memory_guard.detectors.excessive_autonomy import ExcessiveAutonomyDetector
+from agent_memory_guard.detectors.privilege_escalation import PrivilegeEscalationDetector
+from agent_memory_guard.detectors.tool_abuse import ToolAbuseDetector
 from agent_memory_guard.events import Severity
-
 
 # ============================================================================
 # ToolAbuseDetector
