@@ -19,7 +19,7 @@ import time
 from typing import Any
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
 except ImportError as e:
@@ -32,7 +32,6 @@ from agent_memory_guard import (
     Action,
     MemoryGuard,
     Policy,
-    SecurityEvent,
     __version__,
 )
 from agent_memory_guard.events import SourceClass
