@@ -1,3 +1,4 @@
+"""Security event and supporting types."""
 from __future__ import annotations
 
 import time
@@ -22,20 +23,11 @@ class Action(str, Enum):
     QUARANTINE = "quarantine"
 
 
-class SourceClass(str, Enum):
-    """Provenance class of a memory write — drives self-reinforcement detection
-    and per-class policy decisions.
-
-    The taxonomy comes from the three-layer ASI06 architecture discussed on
-    microsoft/autogen#7683 — `external_tool` and `user_input` are external
-    inputs (untrusted by default), `agent_authored` covers an agent writing
-    back its own reasoning (the self-poisoning surface), `system` is
-    config/admin/runtime infrastructure.
-    """
-
-    EXTERNAL_TOOL = "external_tool"
+class SourceType(str, Enum):
+    """Provenance of a memory write — where the write came from."""
     USER_INPUT = "user_input"
-    AGENT_AUTHORED = "agent_authored"
+    TOOL_OUTPUT = "tool_output"
+    MODEL_INFERENCE = "model_inference"
     SYSTEM = "system"
     UNKNOWN = "unknown"
 
@@ -65,8 +57,7 @@ class SecurityEvent:
     key: str
     message: str
     operation: str = "write"
-    source_class: SourceClass = SourceClass.UNKNOWN
-    receipt_uri: str | None = None
+    source_type: SourceType = SourceType.UNKNOWN
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -81,11 +72,9 @@ class SecurityEvent:
             "operation": self.operation,
             "key": self.key,
             "message": self.message,
-            "source_class": self.source_class.value,
-            "receipt_uri": self.receipt_uri,
+            "source_type": self.source_type.value,
             "metadata": self.metadata,
         }
 
 
-__all__ = ["Action", "SecurityEvent", "Severity", "SourceClass"]
-
+__all__ = ["Action", "SecurityEvent", "Severity", "SourceType"]

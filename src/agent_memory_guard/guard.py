@@ -19,6 +19,8 @@ from agent_memory_guard.detectors.cross_task import CrossTaskContaminationDetect
 from agent_memory_guard.detectors.injection import PromptInjectionDetector
 from agent_memory_guard.detectors.leakage import SensitiveDataDetector
 from agent_memory_guard.detectors.protected_keys import ProtectedKeyDetector
+from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceType
+from agent_memory_guard.exceptions import IntegrityError, PolicyViolation
 from agent_memory_guard.detectors.self_reinforcement import SelfReinforcementDetector
 from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceClass
 from agent_memory_guard.exceptions import (
@@ -202,201 +204,15 @@ class MemoryGuard:
                 drifted.append(key)
         return drifted
 
-    @property
-    def current_task(self) -> str | None:
-        """Get the active task identifier context.
-
-        Returns:
-            str | None: The active task ID, or None if no task context is set.
-
-        Example:
-            >>> guard = MemoryGuard(current_task="task_123")
-            >>> print(guard.current_task)
-        """
-        return self._current_task
-
-    def set_current_task(self, task_id: str | None) -> None:
-        """Switch the task context used for cross-task contamination checks."""
-        self._current_task = task_id
-        self._cross_task_detector.set_current_task(task_id)
-
-    def classify(self, key: str) -> MemoryClass | None:
-        """Get the classification class associated with a memory key.
-
-        Args:
-            key: The memory key to retrieve the classification for.
-
-        Returns:
-            MemoryClass | None: The memory class of the key, or None if the key
-                is not classified.
-
-        Example:
-            >>> guard = MemoryGuard()
-            >>> guard.write("session.notes", "Some text", cls="scratch")
-            >>> print(guard.classify("session.notes"))
-        """
-        return self._classification.get(key)
-
-    def origin_task(self, key: str) -> str | None:
-        """Get the ID of the task that originally wrote the specified memory key.
-
-        Args:
-            key: The memory key to check.
-
-        Returns:
-            str | None: The task ID that authored the key, or None if no task
-                is associated with it.
-
-        Example:
-            >>> guard = MemoryGuard(current_task="task_123")
-            >>> guard.write("session.notes", "Task data")
-            >>> print(guard.origin_task("session.notes"))
-        """
-        return self._classification.task_of(key)
-
-    def promote(
-        self,
-        key: str,
-        target: MemoryClass,
-        *,
-        verified: bool = False,
-        verified_by: str | None = None,
-    ) -> None:
-        """Move `key` to a new class. Enforces the promotion graph.
-
-        Promotions that `requires_verification` (e.g. user_preference_candidate
-        -> verified_preference) must pass `verified=True`. This is the user
-        opt-in step that prevents an ephemeral request from silently becoming
-        a durable preference.
-        """
-        current = self._classification.get(key)
-        if current is None:
-            raise ClassificationError(
-                f"Cannot promote unclassified key '{key}'",
-                key=key,
-                target_class=target.value,
-            )
-        if current == target:
-            return
-        edge = self._promotion_rules.edge(current, target)
-        if edge is None:
-            self._emit(
-                detector="classification",
-                severity=Severity.HIGH,
-                action=Action.BLOCK,
-                operation="promote",
-                key=key,
-                message=(
-                    f"Illegal promotion {current.value} -> {target.value} on '{key}'"
-                ),
-                metadata={"from": current.value, "to": target.value},
-            )
-            raise ClassificationError(
-                f"Promotion {current.value} -> {target.value} is not allowed",
-                key=key,
-                source_class=current.value,
-                target_class=target.value,
-            )
-        if edge.requires_verification and not verified:
-            self._emit(
-                detector="classification",
-                severity=Severity.HIGH,
-                action=Action.BLOCK,
-                operation="promote",
-                key=key,
-                message=(
-                    f"Promotion {current.value} -> {target.value} requires verification"
-                ),
-                metadata={"from": current.value, "to": target.value},
-            )
-            raise ClassificationError(
-                f"Promotion {current.value} -> {target.value} requires verified=True",
-                key=key,
-                source_class=current.value,
-                target_class=target.value,
-            )
-        self._classification.set(
-            key, target, task_id=self._classification.task_of(key)
-        )
-        self._emit(
-            detector="classification",
-            severity=Severity.INFO,
-            action=Action.ALLOW,
-            operation="promote",
-            key=key,
-            message=f"Promoted {current.value} -> {target.value}",
-            metadata={
-                "from": current.value,
-                "to": target.value,
-                "verified": verified,
-                "verified_by": verified_by,
-            },
-        )
-
     def write(
         self,
         key: str,
         value: Any,
         *,
         source: str = "agent",
-        source_class: SourceClass | str | None = None,
-        receipt_uri: str | None = None,
-        cls: MemoryClass | str | None = None,
-        task_id: str | None = None,
+        source_type: SourceType = SourceType.UNKNOWN,
     ) -> Action:
-        """Write a value to the guarded memory store.
-
-        The value passes through the detector pipeline and policy engine
-        before being persisted. Depending on policy rules, the write may
-        be allowed, redacted, quarantined, or blocked.
-
-        Args:
-            key: The memory key to write to (e.g. 'session.notes').
-            value: The value to store.
-            source: The identifier of the writer (e.g. 'agent'). Defaults to 'agent'.
-            source_class: Provenance classification of this write. Use SourceClass.AGENT_AUTHORED
-                for agent reasoning, SourceClass.EXTERNAL_TOOL for tool outputs, or
-                SourceClass.USER_INPUT for user content. Defaults to None.
-            receipt_uri: Optional URI pointing to an external audit receipt. Defaults to None.
-            cls: Provenance classification class for the entry. Defaults to None.
-            task_id: Optional task identifier override for cross-task checks. Defaults to None.
-
-        Returns:
-            Action: The action taken by the policy engine (ALLOW, REDACT, QUARANTINE, or BLOCK).
-
-        Raises:
-            PolicyViolation: If the policy blocks the write.
-            ClassificationError: If the write would illegal reclassify an existing key.
-        """
-        normalised_source_class: SourceClass = _coerce_source_class(source_class)
-
-        if cls is not None:
-            target_class = MemoryClass(cls) if not isinstance(cls, MemoryClass) else cls
-            existing = self._classification.get(key)
-            if existing is not None and existing != target_class:
-                self._emit(
-                    detector="classification",
-                    severity=Severity.HIGH,
-                    action=Action.BLOCK,
-                    operation="write",
-                    key=key,
-                    message=(
-                        f"Write would reclassify '{key}': {existing.value} -> "
-                        f"{target_class.value}; use promote() instead"
-                    ),
-                    metadata={"from": existing.value, "to": target_class.value},
-                    source_class=normalised_source_class,
-                    receipt_uri=receipt_uri,
-                )
-                raise ClassificationError(
-                    f"Cannot reclassify '{key}' on write; use promote()",
-                    key=key,
-                    source_class=existing.value,
-                    target_class=target_class.value,
-                )
-        else:
-            target_class = self._classification.get(key)
-
+        """Inspect and (if policy allows) commit a write. Returns the action taken."""
         committed_value = value
         self._self_reinforcement_detector._pending_source_class = normalised_source_class
         try:
@@ -415,8 +231,7 @@ class MemoryGuard:
                 key=key,
                 message=_combined_message(verdicts) or "Write blocked by policy",
                 metadata={"source": source},
-                source_class=normalised_source_class,
-                receipt_uri=receipt_uri,
+                source_type=source_type,
             )
             if self._snapshot_on_block:
                 self._snapshots.capture(
@@ -436,8 +251,7 @@ class MemoryGuard:
                 key=key,
                 message="Write quarantined for review",
                 metadata={"source": source},
-                source_class=normalised_source_class,
-                receipt_uri=receipt_uri,
+                source_type=source_type,
             )
             return Action.QUARANTINE
 
@@ -451,8 +265,7 @@ class MemoryGuard:
                 key=key,
                 message="Sensitive content redacted before write",
                 metadata={"source": source},
-                source_class=normalised_source_class,
-                receipt_uri=receipt_uri,
+                source_type=source_type,
             )
 
         self._store.set(key, committed_value)
@@ -482,9 +295,8 @@ class MemoryGuard:
                 operation="write",
                 key=key,
                 message=_combined_message(verdicts) or "Write allowed with findings",
-                metadata={"source": source, **_merged_metadata(verdicts)},
-                source_class=normalised_source_class,
-                receipt_uri=receipt_uri,
+                metadata={"source": source},
+                source_type=source_type,
             )
         return decision
 
@@ -521,6 +333,7 @@ class MemoryGuard:
                 key=key,
                 message="Integrity verification failed on read",
                 metadata={"expected": exc.expected, "actual": exc.actual},
+                source_type=SourceType.UNKNOWN,
             )
             raise
 
@@ -538,6 +351,7 @@ class MemoryGuard:
                 key=key,
                 message="Read blocked by policy",
                 metadata={"sink": sink},
+                source_type=SourceType.UNKNOWN,
             )
             raise PolicyViolation(f"Read of '{key}' blocked by policy", key=key)
 
@@ -551,6 +365,7 @@ class MemoryGuard:
                 key=key,
                 message="Sensitive content redacted on read",
                 metadata={"sink": sink},
+                source_type=SourceType.UNKNOWN,
             )
         elif any(v.matched for v in verdicts):
             self._emit(
@@ -560,7 +375,8 @@ class MemoryGuard:
                 operation="read",
                 key=key,
                 message=_combined_message(verdicts) or "Read allowed with findings",
-                metadata={"sink": sink, **_merged_metadata(verdicts)},
+                metadata={"sink": sink},
+                source_type=SourceType.UNKNOWN,
             )
         return value
 
@@ -590,6 +406,7 @@ class MemoryGuard:
                 operation="delete",
                 key=key,
                 message=f"Delete of protected key '{key}' blocked",
+                source_type=SourceType.UNKNOWN,
             )
             raise PolicyViolation(f"Delete of '{key}' blocked", key=key)
         self._store.delete(key)
@@ -726,6 +543,7 @@ class MemoryGuard:
             key="*",
             message=f"Rolled back to snapshot {snap.snapshot_id} ({snap.label})",
             metadata={"snapshot_id": snap.snapshot_id, "digest": snap.digest},
+            source_type=SourceType.UNKNOWN,
         )
         return snap
 
@@ -770,8 +588,7 @@ class MemoryGuard:
         key: str,
         message: str,
         metadata: dict[str, Any] | None = None,
-        source_class: SourceClass = SourceClass.UNKNOWN,
-        receipt_uri: str | None = None,
+        source_type: SourceType = SourceType.UNKNOWN,
     ) -> None:
         event = SecurityEvent(
             detector=detector,
@@ -780,8 +597,7 @@ class MemoryGuard:
             operation=operation,
             key=key,
             message=message,
-            source_class=source_class,
-            receipt_uri=receipt_uri,
+            source_type=source_type,
             metadata=dict(metadata or {}),
         )
         self._events.append(event)
@@ -832,22 +648,6 @@ def _blocking_detector(verdicts: list[DetectionResult]) -> str:
 
 def _combined_message(verdicts: list[DetectionResult]) -> str:
     return "; ".join(v.message for v in verdicts if v.message)
-
-
-def _merged_metadata(verdicts: list[DetectionResult]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for v in verdicts:
-        if v.metadata:
-            merged.update(v.metadata)
-    return merged
-
-
-def _coerce_source_class(value: SourceClass | str | None) -> SourceClass:
-    if value is None:
-        return SourceClass.UNKNOWN
-    if isinstance(value, SourceClass):
-        return value
-    return SourceClass(str(value))
 
 
 __all__ = ["MemoryGuard", "hash_value"]
