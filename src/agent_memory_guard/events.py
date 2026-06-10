@@ -32,6 +32,15 @@ class SourceType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class SourceClass(str, Enum):
+    """Internal provenance class for self-reinforcement detection."""
+    EXTERNAL_TOOL = "external_tool"
+    USER_INPUT = "user_input"
+    AGENT_AUTHORED = "agent_authored"
+    SYSTEM = "system"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class SecurityEvent:
     """Structured record of a guard decision, suitable for SIEM forwarding.
@@ -77,4 +86,4 @@ class SecurityEvent:
         }
 
 
-__all__ = ["Action", "SecurityEvent", "Severity", "SourceType"]
+__all__ = ["Action", "SecurityEvent", "Severity", "SourceClass", "SourceType"]
