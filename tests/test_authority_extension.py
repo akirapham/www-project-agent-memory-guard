@@ -59,7 +59,11 @@ def test_laundered_memory_blocked_as_recipient():
 
 def test_system_sourced_memory_allowed_as_recipient():
     guard = MemoryGuard()
-    guard.write("cfg.invoice_to", "billing@acme.example", source_class=SourceClass.SYSTEM)
+    # System provenance only keeps HIGH trust with a verified receipt (see RECEIPT).
+    guard.write(
+        "cfg.invoice_to", "billing@acme.example",
+        source_class=SourceClass.SYSTEM, receipt_uri="receipt:signed-cfg-1",
+    )
     assert guard.effective_trust("cfg.invoice_to") == TrustLevel.HIGH
     assert guard.authorize(EMAIL, {"to": {"memory_key": "cfg.invoice_to"}}) == Action.ALLOW
 

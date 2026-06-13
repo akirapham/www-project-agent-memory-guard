@@ -74,6 +74,7 @@ class MemoryGuard:
         snapshot_on_block: bool = True,
         promotion_rules: PromotionRules | None = None,
         current_task: str | None = None,
+        receipt_verifier: Callable[[str], bool] | None = None,
     ) -> None:
         self._store: MemoryStore = store if store is not None else InMemoryStore()
         self._policy = policy or Policy.permissive()
@@ -87,6 +88,7 @@ class MemoryGuard:
         self._promotion_rules = promotion_rules or PromotionRules()
         self._current_task = current_task
         self._lineage = LineageGraph()
+        self._receipt_verifier = receipt_verifier
 
         protected = merge_protected_keys(self._policy)
         self._protected_detector = ProtectedKeyDetector(protected)
@@ -201,6 +203,19 @@ class MemoryGuard:
                 },
             )
         return result.action
+
+    def _receipt_valid(self, receipt_uri: str | None) -> bool:
+        """Whether a receipt attests verified provenance (extension).
+
+        A configured ``receipt_verifier`` decides; otherwise a receipt is
+        accepted only if it uses the ``receipt:`` scheme — a deterministic
+        stand-in for a real signed-receipt chain.
+        """
+        if receipt_uri is None or not str(receipt_uri).strip():
+            return False
+        if self._receipt_verifier is not None:
+            return bool(self._receipt_verifier(receipt_uri))
+        return str(receipt_uri).startswith("receipt:")
 
     @property
     def current_task(self) -> str | None:
@@ -440,6 +455,30 @@ class MemoryGuard:
         # the layer AMG's class-promotion graph does not provide, and is what
         # makes memory laundering detectable at write time.
         entry_trust = base_trust(normalised_source_class, target_class)
+        # Receipt validation (extension): a privileged (system) write only keeps
+        # its high trust if it carries a verified receipt. AMG records
+        # ``receipt_uri`` but never checks it, so a caller can simply assert
+        # ``source_class=system``. Without a valid receipt we downgrade and flag.
+        if (
+            normalised_source_class == SourceClass.SYSTEM
+            and entry_trust >= TrustLevel.HIGH
+            and not self._receipt_valid(receipt_uri)
+        ):
+            self._emit(
+                detector="provenance",
+                severity=Severity.MEDIUM,
+                action=Action.ALLOW,
+                operation="write",
+                key=key,
+                message=(
+                    f"system-class write to '{key}' has no verified receipt; effective "
+                    f"trust downgraded {entry_trust.name} -> MEDIUM"
+                ),
+                metadata={"receipt_uri": receipt_uri, "downgraded_to": "MEDIUM"},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
+            )
+            entry_trust = TrustLevel(min(entry_trust, TrustLevel.MEDIUM))
         if parents:
             self._lineage.record(key, list(parents), operation=source)
             assessment = self._lineage.assess(key, base=entry_trust, verified=verified)
