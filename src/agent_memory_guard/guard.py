@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, Callable
 
 from agent_memory_guard.classification import (
@@ -27,6 +27,7 @@ from agent_memory_guard.exceptions import (
     PolicyViolation,
 )
 from agent_memory_guard.integrity import IntegrityRegistry, hash_value
+from agent_memory_guard.lineage import LineageGraph, TrustLevel, base_trust
 from agent_memory_guard.policies.policy import Policy, merge_protected_keys
 from agent_memory_guard.storage.memory_store import InMemoryStore, MemoryStore
 from agent_memory_guard.storage.snapshots import Snapshot, SnapshotStore
@@ -83,6 +84,7 @@ class MemoryGuard:
         self._classification = ClassificationRegistry()
         self._promotion_rules = promotion_rules or PromotionRules()
         self._current_task = current_task
+        self._lineage = LineageGraph()
 
         protected = merge_protected_keys(self._policy)
         self._protected_detector = ProtectedKeyDetector(protected)
@@ -141,6 +143,14 @@ class MemoryGuard:
     def quarantine(self) -> dict[str, Any]:
         """Get the dictionary of quarantined memory writes."""
         return dict(self._quarantine)
+
+    def effective_trust(self, key: str) -> TrustLevel:
+        """Lineage-resolved effective trust of a memory entry (extension)."""
+        return self._lineage.trust(key)
+
+    def lineage_of(self, key: str) -> list[str]:
+        """Parent keys this entry was derived from (extension)."""
+        return self._lineage.parents(key)
 
     @property
     def current_task(self) -> str | None:
@@ -277,6 +287,8 @@ class MemoryGuard:
         receipt_uri: str | None = None,
         cls: MemoryClass | str | None = None,
         task_id: str | None = None,
+        parents: Sequence[str] | None = None,
+        verified: bool = False,
     ) -> Action:
         """Inspect and (if policy allows) commit a write. Returns the action taken.
 
@@ -373,6 +385,39 @@ class MemoryGuard:
                 f"Write to '{key}' blocked by policy", rule=_blocking_detector(verdicts), key=key
             )
 
+        # Lineage governance (extension): a derived memory cannot exceed the
+        # trust of its lowest-trust parent unless explicitly verified. This is
+        # the layer AMG's class-promotion graph does not provide, and is what
+        # makes memory laundering detectable at write time.
+        entry_trust = base_trust(normalised_source_class, target_class)
+        if parents:
+            self._lineage.record(key, list(parents), operation=source)
+            assessment = self._lineage.assess(key, base=entry_trust, verified=verified)
+            entry_trust = assessment.effective
+            if assessment.laundered:
+                self._quarantine[key] = value
+                self._emit(
+                    detector="lineage",
+                    severity=Severity.HIGH,
+                    action=Action.QUARANTINE,
+                    operation="write",
+                    key=key,
+                    message=(
+                        f"Memory laundering: '{key}' derived from lower-trust parent(s) "
+                        f"{assessment.lowest_parents}; effective trust capped at "
+                        f"{assessment.effective.name}"
+                    ),
+                    metadata={
+                        "parents": list(parents),
+                        "base_trust": assessment.base.name,
+                        "effective_trust": assessment.effective.name,
+                    },
+                    source_class=normalised_source_class,
+                    receipt_uri=receipt_uri,
+                )
+                self._lineage.set_trust(key, assessment.effective)
+                return Action.QUARANTINE
+
         if decision == Action.QUARANTINE:
             self._quarantine[key] = value
             self._emit(
@@ -403,6 +448,7 @@ class MemoryGuard:
             )
 
         self._store.set(key, committed_value)
+        self._lineage.set_trust(key, entry_trust)
 
         # Independent (non-agent-authored) writes reset the self-reinforcement
         # cool-down: arrival of new external/user evidence is what breaks a
