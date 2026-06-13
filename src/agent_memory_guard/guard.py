@@ -5,6 +5,7 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import Any, Callable
 
+from agent_memory_guard.authority import ToolContract, evaluate
 from agent_memory_guard.classification import (
     ClassificationRegistry,
     MemoryClass,
@@ -151,6 +152,53 @@ class MemoryGuard:
     def lineage_of(self, key: str) -> list[str]:
         """Parent keys this entry was derived from (extension)."""
         return self._lineage.parents(key)
+
+    def authorize(self, contract: ToolContract, args: dict[str, dict[str, Any]]) -> Action:
+        """Authorize a tool action: gate which memory may fill which argument (extension).
+
+        ``args`` maps each argument name to one of ``{"memory_key": <key>}``
+        (trust resolved from lineage), ``{"trust": TrustLevel}`` (inline), or
+        anything else (no resolvable provenance). Emits an ``authority`` event
+        per violation and returns the contract's ``on_violation`` action
+        (``Action.ALLOW`` when nothing is violated).
+        """
+        trusts: dict[str, TrustLevel | None] = {}
+        sources: dict[str, str | None] = {}
+        for name, spec in args.items():
+            if "memory_key" in spec:
+                trusts[name] = self.effective_trust(spec["memory_key"])
+                sources[name] = spec["memory_key"]
+            elif "trust" in spec:
+                trust = spec["trust"]
+                trusts[name] = trust if isinstance(trust, TrustLevel) else TrustLevel[str(trust).upper()]
+                sources[name] = None
+            else:
+                trusts[name] = None
+                sources[name] = None
+
+        result = evaluate(contract, trusts)
+        for violation in result.violations:
+            mem_key = sources.get(violation.argument)
+            self._emit(
+                detector="authority",
+                severity=Severity.HIGH,
+                action=result.action,
+                operation="use",
+                key=mem_key or f"{contract.tool}:{violation.argument}",
+                message=(
+                    f"Authority gate: argument '{violation.argument}' (role "
+                    f"{violation.role}) refused — {violation.reason}"
+                ),
+                metadata={
+                    "tool": contract.tool,
+                    "argument": violation.argument,
+                    "role": violation.role,
+                    "required_trust": violation.required.name,
+                    "actual_trust": violation.actual.name if violation.actual is not None else None,
+                    "ancestry": self.lineage_of(mem_key) if mem_key else [],
+                },
+            )
+        return result.action
 
     @property
     def current_task(self) -> str | None:
