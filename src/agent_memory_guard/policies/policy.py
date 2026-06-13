@@ -107,6 +107,7 @@ class Policy:
             default_action=Action.ALLOW,
             rules=[
                 PolicyRule("block_injection", "prompt_injection", Action.BLOCK),
+                PolicyRule("block_long_horizon", "long_horizon", Action.BLOCK),
                 PolicyRule("redact_secrets", "sensitive_data", Action.REDACT),
                 PolicyRule("block_protected_key", "protected_key", Action.BLOCK),
                 PolicyRule("quarantine_size_anomaly", "size_anomaly", Action.QUARANTINE),

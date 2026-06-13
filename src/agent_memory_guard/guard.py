@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, Callable
 
+from agent_memory_guard.authority import ToolContract, evaluate
 from agent_memory_guard.classification import (
     ClassificationRegistry,
     MemoryClass,
@@ -18,6 +19,7 @@ from agent_memory_guard.detectors.base import DetectionResult, Detector
 from agent_memory_guard.detectors.cross_task import CrossTaskContaminationDetector
 from agent_memory_guard.detectors.injection import PromptInjectionDetector
 from agent_memory_guard.detectors.leakage import SensitiveDataDetector
+from agent_memory_guard.detectors.long_horizon import LongHorizonDetector
 from agent_memory_guard.detectors.protected_keys import ProtectedKeyDetector
 from agent_memory_guard.detectors.self_reinforcement import SelfReinforcementDetector
 from agent_memory_guard.events import Action, SecurityEvent, Severity, SourceClass, SourceType
@@ -27,6 +29,7 @@ from agent_memory_guard.exceptions import (
     PolicyViolation,
 )
 from agent_memory_guard.integrity import IntegrityRegistry, hash_value
+from agent_memory_guard.lineage import LineageGraph, TrustLevel, base_trust
 from agent_memory_guard.policies.policy import Policy, merge_protected_keys
 from agent_memory_guard.storage.memory_store import InMemoryStore, MemoryStore
 from agent_memory_guard.storage.snapshots import Snapshot, SnapshotStore
@@ -71,6 +74,7 @@ class MemoryGuard:
         snapshot_on_block: bool = True,
         promotion_rules: PromotionRules | None = None,
         current_task: str | None = None,
+        receipt_verifier: Callable[[str], bool] | None = None,
     ) -> None:
         self._store: MemoryStore = store if store is not None else InMemoryStore()
         self._policy = policy or Policy.permissive()
@@ -83,6 +87,8 @@ class MemoryGuard:
         self._classification = ClassificationRegistry()
         self._promotion_rules = promotion_rules or PromotionRules()
         self._current_task = current_task
+        self._lineage = LineageGraph()
+        self._receipt_verifier = receipt_verifier
 
         protected = merge_protected_keys(self._policy)
         self._protected_detector = ProtectedKeyDetector(protected)
@@ -94,6 +100,7 @@ class MemoryGuard:
         if detectors is None:
             self._detectors: list[Detector] = [
                 PromptInjectionDetector(),
+                LongHorizonDetector(),
                 SensitiveDataDetector(),
                 SizeAnomalyDetector(),
                 RapidChangeDetector(),
@@ -141,6 +148,74 @@ class MemoryGuard:
     def quarantine(self) -> dict[str, Any]:
         """Get the dictionary of quarantined memory writes."""
         return dict(self._quarantine)
+
+    def effective_trust(self, key: str) -> TrustLevel:
+        """Lineage-resolved effective trust of a memory entry (extension)."""
+        return self._lineage.trust(key)
+
+    def lineage_of(self, key: str) -> list[str]:
+        """Parent keys this entry was derived from (extension)."""
+        return self._lineage.parents(key)
+
+    def authorize(self, contract: ToolContract, args: dict[str, dict[str, Any]]) -> Action:
+        """Authorize a tool action: gate which memory may fill which argument (extension).
+
+        ``args`` maps each argument name to one of ``{"memory_key": <key>}``
+        (trust resolved from lineage), ``{"trust": TrustLevel}`` (inline), or
+        anything else (no resolvable provenance). Emits an ``authority`` event
+        per violation and returns the contract's ``on_violation`` action
+        (``Action.ALLOW`` when nothing is violated).
+        """
+        trusts: dict[str, TrustLevel | None] = {}
+        sources: dict[str, str | None] = {}
+        for name, spec in args.items():
+            if "memory_key" in spec:
+                trusts[name] = self.effective_trust(spec["memory_key"])
+                sources[name] = spec["memory_key"]
+            elif "trust" in spec:
+                trust = spec["trust"]
+                trusts[name] = trust if isinstance(trust, TrustLevel) else TrustLevel[str(trust).upper()]
+                sources[name] = None
+            else:
+                trusts[name] = None
+                sources[name] = None
+
+        result = evaluate(contract, trusts)
+        for violation in result.violations:
+            mem_key = sources.get(violation.argument)
+            self._emit(
+                detector="authority",
+                severity=Severity.HIGH,
+                action=result.action,
+                operation="use",
+                key=mem_key or f"{contract.tool}:{violation.argument}",
+                message=(
+                    f"Authority gate: argument '{violation.argument}' (role "
+                    f"{violation.role}) refused — {violation.reason}"
+                ),
+                metadata={
+                    "tool": contract.tool,
+                    "argument": violation.argument,
+                    "role": violation.role,
+                    "required_trust": violation.required.name,
+                    "actual_trust": violation.actual.name if violation.actual is not None else None,
+                    "ancestry": self.lineage_of(mem_key) if mem_key else [],
+                },
+            )
+        return result.action
+
+    def _receipt_valid(self, receipt_uri: str | None) -> bool:
+        """Whether a receipt attests verified provenance (extension).
+
+        A configured ``receipt_verifier`` decides; otherwise a receipt is
+        accepted only if it uses the ``receipt:`` scheme — a deterministic
+        stand-in for a real signed-receipt chain.
+        """
+        if receipt_uri is None or not str(receipt_uri).strip():
+            return False
+        if self._receipt_verifier is not None:
+            return bool(self._receipt_verifier(receipt_uri))
+        return str(receipt_uri).startswith("receipt:")
 
     @property
     def current_task(self) -> str | None:
@@ -277,6 +352,8 @@ class MemoryGuard:
         receipt_uri: str | None = None,
         cls: MemoryClass | str | None = None,
         task_id: str | None = None,
+        parents: Sequence[str] | None = None,
+        verified: bool = False,
     ) -> Action:
         """Inspect and (if policy allows) commit a write. Returns the action taken.
 
@@ -373,6 +450,63 @@ class MemoryGuard:
                 f"Write to '{key}' blocked by policy", rule=_blocking_detector(verdicts), key=key
             )
 
+        # Lineage governance (extension): a derived memory cannot exceed the
+        # trust of its lowest-trust parent unless explicitly verified. This is
+        # the layer AMG's class-promotion graph does not provide, and is what
+        # makes memory laundering detectable at write time.
+        entry_trust = base_trust(normalised_source_class, target_class)
+        # Receipt validation (extension): a privileged (system) write only keeps
+        # its high trust if it carries a verified receipt. AMG records
+        # ``receipt_uri`` but never checks it, so a caller can simply assert
+        # ``source_class=system``. Without a valid receipt we downgrade and flag.
+        if (
+            normalised_source_class == SourceClass.SYSTEM
+            and entry_trust >= TrustLevel.HIGH
+            and not self._receipt_valid(receipt_uri)
+        ):
+            self._emit(
+                detector="provenance",
+                severity=Severity.MEDIUM,
+                action=Action.ALLOW,
+                operation="write",
+                key=key,
+                message=(
+                    f"system-class write to '{key}' has no verified receipt; effective "
+                    f"trust downgraded {entry_trust.name} -> MEDIUM"
+                ),
+                metadata={"receipt_uri": receipt_uri, "downgraded_to": "MEDIUM"},
+                source_class=normalised_source_class,
+                receipt_uri=receipt_uri,
+            )
+            entry_trust = TrustLevel(min(entry_trust, TrustLevel.MEDIUM))
+        if parents:
+            self._lineage.record(key, list(parents), operation=source)
+            assessment = self._lineage.assess(key, base=entry_trust, verified=verified)
+            entry_trust = assessment.effective
+            if assessment.laundered:
+                self._quarantine[key] = value
+                self._emit(
+                    detector="lineage",
+                    severity=Severity.HIGH,
+                    action=Action.QUARANTINE,
+                    operation="write",
+                    key=key,
+                    message=(
+                        f"Memory laundering: '{key}' derived from lower-trust parent(s) "
+                        f"{assessment.lowest_parents}; effective trust capped at "
+                        f"{assessment.effective.name}"
+                    ),
+                    metadata={
+                        "parents": list(parents),
+                        "base_trust": assessment.base.name,
+                        "effective_trust": assessment.effective.name,
+                    },
+                    source_class=normalised_source_class,
+                    receipt_uri=receipt_uri,
+                )
+                self._lineage.set_trust(key, assessment.effective)
+                return Action.QUARANTINE
+
         if decision == Action.QUARANTINE:
             self._quarantine[key] = value
             self._emit(
@@ -403,6 +537,7 @@ class MemoryGuard:
             )
 
         self._store.set(key, committed_value)
+        self._lineage.set_trust(key, entry_trust)
 
         # Independent (non-agent-authored) writes reset the self-reinforcement
         # cool-down: arrival of new external/user evidence is what breaks a

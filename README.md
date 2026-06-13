@@ -20,6 +20,21 @@
   <img src="https://owasp.org/assets/images/logo.png" alt="OWASP" width="140" />
 </p>
 
+---
+
+## 🔱 Fork extension — Lineage-Aware Memory Governance
+
+This fork extends Agent Memory Guard with two governance layers it lacks, and closes the repository's own long-horizon `xfail` attack vectors. The 96 upstream tests are unchanged.
+
+- **Lineage** — a per-entry derivation DAG with monotone trust propagation. A derived memory cannot exceed the trust of its lowest-trust parent unless explicitly verified, so an untrusted source summarized into a clean agent-authored key (memory *laundering*) is quarantined. → [`src/agent_memory_guard/lineage.py`](src/agent_memory_guard/lineage.py); `MemoryGuard.write(parents=…, verified=…)`.
+- **Use-time authority** — per-tool/argument contracts: low-trust or laundered memory may be message *content* but cannot fill an authority-bearing argument (recipient, url, path, command, credential, …). → [`src/agent_memory_guard/authority.py`](src/agent_memory_guard/authority.py); `MemoryGuard.authorize(contract, args)`.
+- **Long-horizon detection** — obfuscation-aware (Unicode normalization + base64 decode) detection of split-credential, time-bomb, cross-key SQL accumulation, base64, chained-output, and homoglyph payloads. → [`src/agent_memory_guard/detectors/long_horizon.py`](src/agent_memory_guard/detectors/long_horizon.py).
+- **Receipt validation** — the stored `receipt_uri` is verified; an unverified `system`-class write is trust-downgraded and flagged (`MemoryGuard(receipt_verifier=…)`).
+
+**Result:** closes **8 of the 10** `@pytest.mark.xfail` long-horizon vectors in [`tests/benchmarks/test_delayed_activation.py`](tests/benchmarks/test_delayed_activation.py) (the two left are single-write multilingual / fake-error content detection). Full suite: **125 passed, 2 xfailed**. End to end through the real guard: an untrusted tool output summarized into memory is quarantined by lineage, then refused as an email recipient by the authority gate — while still allowed as message body.
+
+---
+
 <p align="center">
   🏆 <strong>Officially recognized as an OWASP Incubator Project</strong>
 </p>
